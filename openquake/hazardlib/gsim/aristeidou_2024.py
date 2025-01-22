@@ -28,11 +28,13 @@ import warnings
 import numpy as np
 from scipy.interpolate import interp1d
 from openquake.hazardlib import const
-from openquake.hazardlib.imt import RSD575, RSD595, Sa_avg2, Sa_avg3, SA, PGA, PGV, PGD, FIV3
+from openquake.hazardlib.imt import (
+    RSD575, RSD595, Sa_avg2, Sa_avg3, SA, PGA, PGV, PGD, FIV3)
 from openquake.hazardlib.gsim.base import GMPE
 import re
 from typing import Union
 import json
+
 
 def read_json(filename: Union[Path, dict]):
     if isinstance(filename, Path) or isinstance(filename, str):
@@ -108,33 +110,37 @@ def _get_style_of_faulting_term(rake):
     """
     sof = np.full_like(rake, 0)
 
-    sof[((rake >= -180) & (rake <= -150)) | ((rake > -30) & 
+    sof[((rake >= -180) & (rake <= -150)) | ((rake > -30) &
         (rake <= 30)) | ((rake > 150) & (rake <= 180))] = 0
-    
+
     sof[(rake > -120) & (rake <= -60)] = 1
 
     sof[(rake > 60) & (rake <= 120)] = 2
 
-    sof[((rake > 30) & (rake <= 60)) | ((rake > 120) & 
+    sof[((rake > 30) & (rake <= 60)) | ((rake > 120) &
         (rake <= 150))] = 3
 
-    sof[((rake > -150) & (rake <= -120)) | ((rake > -60) & 
-    (rake <= -30))] = 4
+    sof[((rake > -150) & (rake <= -120)) | ((rake > -60) &
+                                            (rake <= -30))] = 4
 
     return sof
 
-# Function to extract the required part
+
 def extract_base(im):
-    # Remove the text after the last underscore and any trailing parentheses with numbers
+    # Function to extract the required part
+    # Remove the text after the last underscore and any trailing parentheses with
+    # numbers
     base = re.sub(r'_[^_]+$', '', im)
     base = re.sub(r'\(\d+(\.\d+)?\)$', '', base)
     return base
 
+
 def _get_means_stddevs(DATA, imt, means, stddevs, component_definition):
 
     supported_ims = np.asarray(DATA["output-ims"])
-    supported_im_types = np.unique(np.array([extract_base(supported_im) for supported_im in supported_ims]))
-    
+    supported_im_types = np.unique(
+        np.array([extract_base(supported_im) for supported_im in supported_ims]))
+
     if imt.string == "RSD575":
         im_name = "Ds575"
     elif imt.string == "RSD595":
@@ -194,7 +200,8 @@ def _get_means_stddevs(DATA, imt, means, stddevs, component_definition):
     interp_stddevs = interp1d(np.log(periods), stddevs, axis=1)
     interp_means = interp1d(np.log(periods), means)
 
-    mean, stddev = np.squeeze(interp_means(np.log(imt.period))), np.squeeze(interp_stddevs(np.log(imt.period)))
+    mean, stddev = np.squeeze(interp_means(np.log(imt.period))), np.squeeze(
+        interp_stddevs(np.log(imt.period)))
 
     return mean, stddev
 
@@ -212,14 +219,17 @@ def _validate_input(DATA, x, SUGGESTED_LIMITS):
             f"Value of {pars[col]}: {val} is not within the "
             f"suggested limits {SUGGESTED_LIMITS[pars[col]]}")
 
+
 def log10_reverse(x):
     return 10 ** x
+
 
 def _generate_function(x, biases, weights):
     biases = np.asarray(biases)
     weights = np.asarray(weights).T
 
     return biases.reshape(1, -1) + np.dot(weights, x.T).T
+
 
 def _minmax_scaling(DATA, data, SUGGESTED_LIMITS, feature_range=(-3, 3)):
     pars = DATA["parameters"]
@@ -244,6 +254,7 @@ def _minmax_scaling(DATA, data, SUGGESTED_LIMITS, feature_range=(-3, 3)):
 
 # def get_supported_ims(self):
 #     return self.DATA["output-ims"]
+
 
 class AristeidouEtAl2024(GMPE):
     """
@@ -364,8 +375,8 @@ class AristeidouEtAl2024(GMPE):
             stddevs = np.log(10**stddevs)
 
             # Get the means and stddevs at index corresponding to the IM
-            mean[m], stddevs = _get_means_stddevs(self.DATA, imt, means, stddevs, self.component_definition)
-
+            mean[m], stddevs = _get_means_stddevs(
+                self.DATA, imt, means, stddevs, self.component_definition)
 
             sig[m] = stddevs[0]
             tau[m] = stddevs[1]
