@@ -148,7 +148,8 @@ class AristeidouEtAl2024Corr(CrossCorrelation):
 
     def get_correlation(self, from_imt: IMT, to_imt: IMT) -> float:
 
-        MODELS_ANN = self.read_json(Path(__file__).parent / "gsim" / "aristeidou_2024_assets" / "corr_ann.json")
+        MODELS_ANN = self.read_json(
+            Path(__file__).parent / "gsim" / "aristeidou_2024_assets" / "corr_ann.json")
 
         imi = from_imt.string.split('(')[0]
         imj = to_imt.string.split('(')[0]
@@ -158,7 +159,8 @@ class AristeidouEtAl2024Corr(CrossCorrelation):
             "RSD575": "Ds575"
         }
         # Replace names using the map
-        imi = replacement_map.get(imi, imi)  # Default to original value if not in the map
+        # Default to original value if not in the map
+        imi = replacement_map.get(imi, imi)
         imj = replacement_map.get(imj, imj)
 
         period1 = from_imt.period
@@ -257,7 +259,7 @@ class GodaAtkinson2009(CrossCorrelationBetween):
         theta3 = 0.728
 
         angle = np.pi/2.0 - (theta1 + theta2 * ITmin * (Tmin / Tmax) ** theta3 *
-                            np.log10(Tmin / 0.25)) * np.log10(Tmax / Tmin)
+                             np.log10(Tmin / 0.25)) * np.log10(Tmax / Tmin)
         delta = 1.0 + np.cos(-1.5 * np.log10(Tmax / Tmin))
         corr = (1.0 - np.cos(angle) + delta) / 3.0
         return min(corr, 1.0)
