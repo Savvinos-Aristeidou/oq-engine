@@ -19,6 +19,9 @@ Module :mod:`openquake.hazardlib.mgmp.generic_gmpe_avgsa` implements
 :class:`~openquake.hazardlib.mgmpe.GenericGmpeAvgSA`
 """
 
+from pathlib import Path
+import json
+from typing import Union
 import abc
 import numpy as np
 from scipy.interpolate import interp1d
@@ -176,7 +179,7 @@ class GmpeIndirectAvgSA(GMPE):
         # only for total standard deviation even if the called GMPE is
         # defined for inter- and intra-event standard deviations too
         self.DEFINED_FOR_STANDARD_DEVIATION_TYPES = {const.StdDev.TOTAL}
-        assert t_high > t_low,\
+        assert t_high > t_low, \
             "Upper bound scaling factor for AvgSA must exceed lower bound"
         self.t_low = t_low
         self.t_high = t_high
@@ -260,6 +263,7 @@ class BaseAvgSACorrelationModel(metaclass=abc.ABCMeta):
     """
     Base class for correlation models used in spectral period averaging.
     """
+
     def __init__(self, avg_periods):
         self.avg_periods = avg_periods
         self.build_correlation_matrix()
@@ -279,6 +283,7 @@ class AkkarCorrelationModel(BaseAvgSACorrelationModel):
     horizontal spectral amplitude ratios for the broader Europe region,
     Bull Earthquake Eng, 12, pp. 517-547.
     """
+
     def build_correlation_matrix(self):
         """
         Constructs the correlation matrix by two-step linear interpolation
@@ -340,6 +345,7 @@ class DummyCorrelationModel(BaseAvgSACorrelationModel):
     """
     Dummy function returning just 1 (used as default function handle)
     """
+
     def build_correlation_matrix(self):
         self.rho = np.ones([len(self.avg_periods), len(self.avg_periods)])
 
@@ -362,10 +368,10 @@ class DummyCorrelationModel(BaseAvgSACorrelationModel):
 
 
 ESHM20_COEFFICIENTS = {
-     "total": (0.18141134, 0.1555742,  -0.10851875, 0.08, 0.2),
-     "between-event": (0.15881576, 0.08439678, -0.13915732, 0.08, 0.2),
-     "between-site": (0.15751022, 0.15934185, -0.17513388, 0.08, 0.2),
-     "within-event": (0.26023904, 0.27590487, -0.0951078, 0.08, 0.2)
+    "total": (0.18141134, 0.1555742,  -0.10851875, 0.08, 0.2),
+    "between-event": (0.15881576, 0.08439678, -0.13915732, 0.08, 0.2),
+    "between-site": (0.15751022, 0.15934185, -0.17513388, 0.08, 0.2),
+    "within-event": (0.26023904, 0.27590487, -0.0951078, 0.08, 0.2)
 }
 
 
@@ -438,6 +444,7 @@ class BakerJayaramCorrelationModel(BaseAvgSACorrelationModel):
     Baker, J.W. and Jayaram, N., 2007, Correlation of spectral acceleration
     values from NGA ground motion models, Earthquake Spectra.
     """
+
     def build_correlation_matrix(self):
         """
         Constucts the correlation matrix period-by-period from the
@@ -526,9 +533,106 @@ class ESHM20CorrelationModel(BakerJayaramCorrelationModel):
                                                         t1, t2)
 
 
+class AristeidouCorrelationModel(BaseAvgSACorrelationModel):
+    """
+    Produce inter-period correlation for any two spectral periods.
+    Subroutine taken from: https://usgs.github.io/shakemap/shakelib
+    Based upon:
+    Savvinos Aristeidou, Davit Shahnazaryan, and Gerard J. O'Reilly,
+    "Correlation Models for Next-Generation Amplitude and
+    Cumulative Intensity Measures using Artificial Neural Networks"
+    (2024, Earthquake Spectra, Available at:
+    https://doi.org/10.1177/87552930241270563).
+    """
+
+    def build_correlation_matrix(self):
+        """
+        Constucts the correlation matrix period-by-period from the
+        correlation functions
+        """
+        self.rho = np.eye(len(self.avg_periods))
+        for i, t1 in enumerate(self.avg_periods):
+            for j, t2 in enumerate(self.avg_periods[i:]):
+                self.rho[i, i + j] = self.get_correlation(t1, t2)
+        self.rho += (self.rho.T - np.eye(len(self.avg_periods)))
+
+    @staticmethod
+    def get_correlation(t1, t2):
+        """
+        Computes the correlation coefficient for the specified periods.
+
+        :param float t1:
+            First period of interest.
+
+        :param float t2:
+            Second period of interest.
+
+        :return float rho:
+            The predicted correlation coefficient.
+        """
+        def read_json(filename: Union[Path, dict]):
+            if isinstance(filename, Path) or isinstance(filename, str):
+                filename = Path(filename)
+
+                with open(filename) as f:
+                    filename = json.load(f)
+
+            return filename
+
+        def linear(x):
+            return x
+
+        def tanh(x):
+            return np.tanh(x)
+
+        def softmax(x):
+            exp_x = np.exp(x - np.max(x, axis=-1, keepdims=True))
+            return exp_x / np.sum(exp_x, axis=-1, keepdims=True)
+
+        def sigmoid(x):
+            return 1 / (1 + np.exp(-x))
+
+        def generate_function(x, biases, weights):
+            biases = np.asarray(biases)
+            weights = np.asarray(weights).T
+
+            return biases.reshape(1, -1) + np.dot(weights, x.T).T
+
+        ACTIVATION_FUNCTIONS = {
+            "linear": linear,
+            "softmax": softmax,
+            "tanh": tanh,
+            "sigmoid": sigmoid,
+        }
+
+        MODELS_ANN = read_json(
+            Path(__file__).parents[0] / "gsim/aristeidou_2024_assets/corr_ann.json")
+
+        if t1 == t2:
+            return 1.0
+
+        model = MODELS_ANN["SA-SA"]
+        t_min = min(t1, t2)
+        t_max = max(t1, t2)
+        x = np.array([t_max, t_min])
+
+        biases = model["biases"]
+        weights = model["weights"]
+        act_funcs = model["activation-functions"]
+
+        for i, act_func in enumerate(act_funcs):
+            activation = ACTIVATION_FUNCTIONS[act_func]
+
+            _data = generate_function(x, biases[i], weights[i])
+            x = activation(_data)
+
+        return float(x)
+
+
 CORRELATION_FUNCTION_HANDLES = {
     'baker_jayaram': BakerJayaramCorrelationModel,
     'akkar': AkkarCorrelationModel,
+    'aristeidou': AristeidouCorrelationModel,
     "eshm20": ESHM20CorrelationModel,
     'none': DummyCorrelationModel
 }
