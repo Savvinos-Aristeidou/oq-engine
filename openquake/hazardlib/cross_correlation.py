@@ -20,6 +20,9 @@ import numpy as np
 from scipy import constants, stats
 from abc import ABC, abstractmethod
 from openquake.hazardlib.imt import IMT
+import json
+from pathlib import Path
+from typing import Union
 
 
 # ############ CrossCorrelation for the conditional spectrum ############ #
@@ -92,6 +95,115 @@ class BakerJayaram2008(CrossCorrelation):
         else:
             corr = c4
         return corr  # a scalar
+
+
+class AristeidouEtAl2024Corr(CrossCorrelation):
+    """
+    Implements the correlation models developed by Savvinos Aristeidou,
+    Davit Shahnazaryan, and Gerard J. O'Reilly, published as "Correlation
+    Models for Next-Generation Amplitude and Cumulative Intensity Measures
+    using Artificial Neural Networks" (2024, Earthquake Spectra,
+    Available at: https://doi.org/10.1177/87552930241270563).
+    """
+    def read_json(self, filename: Union[Path, dict]):
+        if isinstance(filename, Path) or isinstance(filename, str):
+            filename = Path(filename)
+
+            with open(filename) as f:
+                filename = json.load(f)
+
+        return filename
+
+    def linear(x):
+        return x
+
+    def tanh(x):
+        return np.tanh(x)
+
+    def softmax(x):
+        exp_x = np.exp(x - np.max(x, axis=-1, keepdims=True))
+        return exp_x / np.sum(exp_x, axis=-1, keepdims=True)
+
+    def sigmoid(x):
+        return 1 / (1 + np.exp(-x))
+
+    ACTIVATION_FUNCTIONS = {
+        "linear": linear,
+        "softmax": softmax,
+        "tanh": tanh,
+        "sigmoid": sigmoid,
+    }
+
+    TRANSFORMATIONS = frozenset({
+        "SA-Ds595", "SA-Ds575",
+        "Sa_avg2-Ds595", "Sa_avg2-Ds575", "Sa_avg2-PGA", "Sa_avg2-PGV",
+        "Sa_avg3-Ds595", "Sa_avg3-Ds575", "Sa_avg3-PGA", "Sa_avg3-PGV",
+    })
+
+    def _generate_function(self, x, biases, weights):
+        biases = np.asarray(biases)
+        weights = np.asarray(weights).T
+
+        return biases.reshape(1, -1) + np.dot(weights, x.T).T
+
+    def get_correlation(self, from_imt: IMT, to_imt: IMT) -> float:
+
+        MODELS_ANN = self.read_json(Path(__file__).parent / "gsim" / "aristeidou_2024_assets" / "corr_ann.json")
+
+        imi = from_imt.string.split('(')[0]
+        imj = to_imt.string.split('(')[0]
+        # Replacement mapping of im naming convention here
+        replacement_map = {
+            "RSD595": "Ds595",
+            "RSD575": "Ds575"
+        }
+        # Replace names using the map
+        imi = replacement_map.get(imi, imi)  # Default to original value if not in the map
+        imj = replacement_map.get(imj, imj)
+
+        period1 = from_imt.period
+        period2 = to_imt.period
+
+        try:
+            im_pair = f"{imi}-{imj}"
+            model = MODELS_ANN[im_pair]
+        except KeyError:
+            im_pair = f"{imj}-{imi}"
+            model = MODELS_ANN[im_pair]
+            # Switch positions too
+            period2, period1 = period1, period2
+            imj, imi = imi, imj
+
+        if period1 == 0 or period2 == 0:
+            # Only one IM is period-independent
+            period = period1 or period2
+
+            x = np.array([period])
+
+        elif imi == imj:
+            period_min = min(period1, period2)
+            period_max = max(period1, period2)
+            x = np.array([period_max, period_min])
+        else:
+            x = np.array([period1, period2])
+
+        if imi == imj and period1 == period2:
+            return 1.0
+
+        biases = model["biases"]
+        weights = model["weights"]
+        act_funcs = model["activation-functions"]
+
+        for i, act in enumerate(act_funcs):
+            activation = self.ACTIVATION_FUNCTIONS[act]
+
+            if im_pair in self.TRANSFORMATIONS and i == 0:
+                x = np.log(x)
+
+            _data = self._generate_function(x, biases[i], weights[i])
+            x = activation(_data)
+
+        return float(x)
 
 
 # ######################## CrossCorrelationBetween ########################## #
